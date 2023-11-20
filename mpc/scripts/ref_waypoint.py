@@ -9,7 +9,8 @@ from numpy import linalg as LA
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseStamped
 import math
-from tf_transformations import euler_from_quaternion  # sudo apt install ros-foxy-tf-transformations 
+from tf_transformations import euler_from_quaternion
+ # sudo apt install ros-foxy-tf-transformations 
 import time
 import csv
 
@@ -22,7 +23,7 @@ class logWaypoint(Node):
         self.lastTime = 0
 
     def pose_back(self, msg):
-        if msg.header.stamp.sec - self.lastTime > 0.2:
+        if msg.header.stamp.sec - self.lastTime > 0.1:
             print("saving waypoint" , msg.header.stamp.sec)
             quaternion = np.array([msg.pose.pose.orientation.x,
                                 msg.pose.pose.orientation.y,
@@ -30,7 +31,7 @@ class logWaypoint(Node):
                                 msg.pose.pose.orientation.w])
 
             euler = euler_from_quaternion(quaternion)
-            speed = 3.0
+            speed = 0.5
             with open(filename, 'a') as csvfile:
                 writer = csv.writer(csvfile)
                 writer.writerow([msg.pose.pose.position.x,

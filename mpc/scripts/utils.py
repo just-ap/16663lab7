@@ -46,6 +46,7 @@ def nearest_point(point, trajectory):
     """
     diffs = trajectory[1:,:] - trajectory[:-1,:]
     l2s   = diffs[:,0]**2 + diffs[:,1]**2
+
     dots = np.empty((trajectory.shape[0]-1, ))
     for i in range(dots.shape[0]):
         dots[i] = np.dot((point - trajectory[i, :]), diffs[i, :])
