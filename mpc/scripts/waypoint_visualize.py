@@ -16,7 +16,7 @@ class MarkerArrayPublisher(Node):
     def timer_callback(self):
         marker_array = MarkerArray()
         j = 0
-        filename = '/home/tianhao/sim_ws/src/f1tenth_lab7/mpc/waypoint3.csv'
+        filename = '/home/tianhao/sim_ws/src/f1tenth_lab7/mpc/waypointAims.csv'
         with open (filename, 'r') as f:
             lines = f.readlines()
             self.wp = []

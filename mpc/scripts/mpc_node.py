@@ -81,7 +81,7 @@ class MPC(Node):
             "/selected_path",
             1
         )
-        filename = '/home/tianhao/sim_ws/src/f1tenth_lab7/mpc/waypoint3.csv'
+        filename = '/home/tianhao/sim_ws/src/f1tenth_lab7/mpc/waypointAims.csv'
         with open (filename, 'r') as f:
             lines = f.readlines()
             self.wp = []
