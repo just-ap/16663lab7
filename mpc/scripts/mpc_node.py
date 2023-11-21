@@ -14,6 +14,8 @@ from sensor_msgs.msg import LaserScan
 from utils import nearest_point
 from nav_msgs.msg import Odometry
 from tf_transformations import euler_from_quaternion
+from visualization_msgs.msg import Marker, MarkerArray
+from geometry_msgs.msg import Point
 
 # TODO CHECK: include needed ROS msg type headers and libraries
 
@@ -38,18 +40,18 @@ class mpc_config:
     Qfk: list = field(
         default_factory=lambda: np.diag([13.5, 13.5, 13.0, 5.5])
     )  # final state error matrix, penalty  for the final state constraints: [x, y, v, yaw]
-    # ---------------------------------------------------
+    # ----------------------------------------------f---
 
     N_IND_SEARCH: int = 20  # Search index number
     DTK: float = 0.1  # time step [s] kinematic
-    dlk: float = 0.05  # dist step [m] kinematic 0.03
+    dlk: float = 0.7  # dist step [m] kinematic 0.03
     LENGTH: float = 0.58  # Length of the vehicle [m]
     WIDTH: float = 0.31  # Width of the vehicle [m]
     WB: float = 0.33  # Wheelbase [m]
     MIN_STEER: float = -0.4189  # maximum steering angle [rad]
     MAX_STEER: float = 0.4189  # maximum steering angle [rad]
     MAX_DSTEER: float = np.deg2rad(180.0)  # maximum steering speed [rad/s]
-    MAX_SPEED: float = 6.0  # maximum speed [m/s]
+    MAX_SPEED: float = 3.0  # maximum speed [m/s] 6
     MIN_SPEED: float = 0.0  # minimum backward speed [m/s]
     MAX_ACCEL: float = 3.0  # maximum acceleration [m/ss]
 
@@ -74,7 +76,12 @@ class MPC(Node):
         self.poseSub = self.create_subscription(Odometry, 'ego_racecar/odom', self.pose_callback, 10)
 
         self.ackermann_pub = self.create_publisher(AckermannDriveStamped, 'drive', 10)
-        filename = '/home/tianhao/sim_ws/src/f1tenth_lab7/mpc/waypoint2.csv'
+        self.path_pub = self.create_publisher(
+            MarkerArray,
+            "/selected_path",
+            1
+        )
+        filename = '/home/tianhao/sim_ws/src/f1tenth_lab7/mpc/waypoint3.csv'
         with open (filename, 'r') as f:
             lines = f.readlines()
             self.wp = []
@@ -113,7 +120,7 @@ class MPC(Node):
         # initialize MPC problem
         self.mpc_prob_init()
 
-    def pose_callback(self, pose_msg):
+    def pose_callback(self, pose_msg:Odometry):
 
         # TODO: extract pose from ROS msg
         quaternion = np.array([pose_msg.pose.pose.orientation.x,
@@ -124,7 +131,9 @@ class MPC(Node):
         vehicle_state = State()
         vehicle_state.x = pose_msg.pose.pose.position.x
         vehicle_state.y = pose_msg.pose.pose.position.y
-        vehicle_state.v = 3.0
+        print("speeeeeeeed is ", pose_msg.twist.twist.linear.x)
+        vehicle_state.v = pose_msg.twist.twist.linear.x
+        # vehicle_state.v = 2.5
         vehicle_state.yaw = euler[2]
 
         # ref_x = []
@@ -345,7 +354,7 @@ class MPC(Node):
         ).astype(int)
 
         ind_list[ind_list >= ncourse] -= ncourse
-        # print(ind_list)
+        print(ind_list)
         ref_traj[0, :] = cx[ind_list]
         ref_traj[1, :] = cy[ind_list]
         ref_traj[2, :] = sp[ind_list]
@@ -356,8 +365,8 @@ class MPC(Node):
             cyaw[cyaw - state.yaw < -4.5] + (2 * np.pi)
         )
         ref_traj[3, :] = cyaw[ind_list]
-        # print("ref  ", ref_traj)
-
+        print("ref  ", ref_traj)
+        # self.visualize_path(ref_traj)
         return ref_traj
 
     def predict_motion(self, x0, oa, od, xref):
@@ -374,6 +383,38 @@ class MPC(Node):
             path_predict[3, i] = state.yaw
 
         return path_predict
+    
+    def visualize_path(self, path):
+        # Create a MarkerArray
+        marker_array = MarkerArray()
+
+        for i in range(len(path) - 1):
+            p1 = path[i]
+            p2 = path[i+1]
+
+            # LINE STRIPS
+            line_marker = Marker()
+            line_marker.header.frame_id = "map"
+            line_marker.header.stamp = self.get_clock().now().to_msg()
+            line_marker.id = i
+            line_marker.type = Marker.LINE_STRIP
+            line_marker.action = Marker.ADD
+            point1 = Point()
+            point1.x=path[0, i]
+            point1.y=path[1, i]
+            point2 = Point()
+            point2.x = path[0, i+1]
+            point2.y = path[1, i+1]
+            line_marker.points.append(point1)
+            line_marker.points.append(point2)
+            line_marker.scale.x = 0.08  # Line width
+            line_marker.color.r = 0.0
+            line_marker.color.g = 1.0
+            line_marker.color.b = 0.0
+            line_marker.color.a = 1.0
+            line_marker.lifetime.sec = 1
+            marker_array.markers.append(line_marker)
+        self.path_pub.publish(marker_array)
 
     def update_state(self, state, a, delta):
 
@@ -498,6 +539,9 @@ class MPC(Node):
         mpc_a, mpc_delta, mpc_x, mpc_y, mpc_yaw, mpc_v = self.mpc_prob_solve(
             ref_path, path_predict, x0
         )
+
+        print("path_predict = ", path_predict)
+        self.visualize_path(path_predict)
 
         return mpc_a, mpc_delta, mpc_x, mpc_y, mpc_yaw, mpc_v, path_predict
 

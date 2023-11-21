@@ -55,6 +55,7 @@ install(PROGRAMS
   scripts/mpc_node.py
   scripts/utils.py
   scripts/ref_waypoint.py
+  scripts/waypoint_visualize.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

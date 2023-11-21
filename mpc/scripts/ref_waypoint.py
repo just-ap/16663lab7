@@ -31,7 +31,7 @@ class logWaypoint(Node):
                                 msg.pose.pose.orientation.w])
 
             euler = euler_from_quaternion(quaternion)
-            speed = 0.5
+            speed = 2.5
             with open(filename, 'a') as csvfile:
                 writer = csv.writer(csvfile)
                 writer.writerow([msg.pose.pose.position.x,
