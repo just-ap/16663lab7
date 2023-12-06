@@ -31,12 +31,15 @@ class logWaypoint(Node):
                                 msg.pose.pose.orientation.w])
 
             euler = euler_from_quaternion(quaternion)
-            speed = 2.5
+            speed = msg.twist.twist.linear.x
+            euler_in_2pi = euler[2]
+            # if euler_in_2pi < 0:
+            #     euler_in_2pi += 2 * np.pi
             with open(filename, 'a') as csvfile:
                 writer = csv.writer(csvfile)
                 writer.writerow([msg.pose.pose.position.x,
                                             msg.pose.pose.position.y,
-                                            euler[2],
+                                            euler_in_2pi,
                                             speed])
                 
             self.lastTime = msg.header.stamp.sec

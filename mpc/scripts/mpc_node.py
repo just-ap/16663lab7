@@ -17,6 +17,7 @@ from tf_transformations import euler_from_quaternion
 from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point
 
+
 # TODO CHECK: include needed ROS msg type headers and libraries
 
 
@@ -29,22 +30,22 @@ class mpc_config:
     # ---------------------------------------------------
     # TODO: you may need to tune the following matrices
     Rk: list = field(
-        default_factory=lambda: np.diag([0.01, 100.0])
+        default_factory=lambda: np.diag([0.1, 50.0]) #0.01 100
     )  # input cost matrix, penalty for inputs - [accel, steering]
     Rdk: list = field(
-        default_factory=lambda: np.diag([0.01, 100.0])
+        default_factory=lambda: np.diag([0.1, 50.0])
     )  # input difference cost matrix, penalty for change of inputs - [accel, steering]
     Qk: list = field(
-        default_factory=lambda: np.diag([13.5, 13.5, 13.0, 5.5])
+        default_factory=lambda: np.diag([38.0, 53.5, 43.0, 1.0]) #13.5, 13.5, 13.0, 5.5
     )  # state error cost matrix, for the the next (T) prediction time steps [x, y, v, yaw]
     Qfk: list = field(
-        default_factory=lambda: np.diag([13.5, 13.5, 13.0, 5.5])
+        default_factory=lambda: np.diag([38.0, 53.5, 43.0, 1.0])
     )  # final state error matrix, penalty  for the final state constraints: [x, y, v, yaw]
     # ----------------------------------------------f---
 
     N_IND_SEARCH: int = 20  # Search index number
     DTK: float = 0.1  # time step [s] kinematic
-    dlk: float = 0.7  # dist step [m] kinematic 0.03
+    dlk: float = 0.45  # dist step [m] kinematic 0.03
     LENGTH: float = 0.58  # Length of the vehicle [m]
     WIDTH: float = 0.31  # Width of the vehicle [m]
     WB: float = 0.33  # Wheelbase [m]
@@ -81,7 +82,7 @@ class MPC(Node):
             "/selected_path",
             1
         )
-        filename = '/home/tianhao/sim_ws/src/f1tenth_lab7/mpc/waypointAims.csv'
+        filename = '/home/tianhao/sim_ws/src/f1tenth_lab7/mpc/waypoint1atrium4M.csv'
         with open (filename, 'r') as f:
             lines = f.readlines()
             self.wp = []
@@ -103,8 +104,9 @@ class MPC(Node):
                         tempv += line[i]
                     else:
                         count += 1
-
-                self.wp.append([float(tempx), float(tempy), float(tempyaw), float(tempv)])
+                    
+                if tempx != '' and tempy != '':
+                    self.wp.append([float(tempx), float(tempy), float(tempyaw), float(tempv)])
         
         # print(self.wp)
         self.wp = np.array(self.wp)
@@ -128,13 +130,20 @@ class MPC(Node):
                                 pose_msg.pose.pose.orientation.z,
                                 pose_msg.pose.pose.orientation.w])
         euler = euler_from_quaternion(quaternion)
+        euler_in_2pi = euler[2]
+        if euler_in_2pi < 0:
+            euler_in_2pi += 2 * np.pi
+        # elif euler_in_2pi > 2 * np.pi:
+        #     euler_in_2pi -= 2 * np.pi
+        print("euler ", euler[2])
+        print("euler_in_2pi", euler_in_2pi)
         vehicle_state = State()
         vehicle_state.x = pose_msg.pose.pose.position.x
         vehicle_state.y = pose_msg.pose.pose.position.y
-        print("speeeeeeeed is ", pose_msg.twist.twist.linear.x)
+        # print("speeeeeeeed is ", pose_msg.twist.twist.linear.x)
         vehicle_state.v = pose_msg.twist.twist.linear.x
-        # vehicle_state.v = 2.5
-        vehicle_state.yaw = euler[2]
+        # vehicle_state.v = 2.0
+        vehicle_state.yaw = euler_in_2pi
 
         # ref_x = []
         # ref_y = []
@@ -174,7 +183,7 @@ class MPC(Node):
 
         # TODO: publish drive message.
         steer_output = self.odelta[0]
-        speed_output = vehicle_state.v + self.oa[0] * self.config.DTK
+        speed_output = max(vehicle_state.v + self.oa[0] * self.config.DTK, 1.0)
         print("steer_output = ", steer_output, "speed_output = ", speed_output)
         drive_msg = AckermannDriveStamped()
         drive_msg.drive.steering_angle = steer_output
@@ -354,7 +363,7 @@ class MPC(Node):
         ).astype(int)
 
         ind_list[ind_list >= ncourse] -= ncourse
-        print(ind_list)
+        # print(ind_list)
         ref_traj[0, :] = cx[ind_list]
         ref_traj[1, :] = cy[ind_list]
         ref_traj[2, :] = sp[ind_list]
@@ -365,7 +374,7 @@ class MPC(Node):
             cyaw[cyaw - state.yaw < -4.5] + (2 * np.pi)
         )
         ref_traj[3, :] = cyaw[ind_list]
-        print("ref  ", ref_traj)
+        print("ref  ", ref_traj[3, :])
         # self.visualize_path(ref_traj)
         return ref_traj
 
@@ -540,7 +549,7 @@ class MPC(Node):
             ref_path, path_predict, x0
         )
 
-        print("path_predict = ", path_predict)
+        # print("path_predict = ", path_predict)
         self.visualize_path(path_predict)
 
         return mpc_a, mpc_delta, mpc_x, mpc_y, mpc_yaw, mpc_v, path_predict
