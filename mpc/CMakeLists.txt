@@ -56,6 +56,7 @@ install(PROGRAMS
   scripts/utils.py
   scripts/ref_waypoint.py
   scripts/waypoint_visualize.py
+  scripts/mpc_node_overtake.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

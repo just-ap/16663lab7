@@ -7,6 +7,7 @@ import numpy as np
 import rclpy
 from ackermann_msgs.msg import AckermannDrive, AckermannDriveStamped
 from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PointStamped
 from rclpy.node import Node
 from scipy.linalg import block_diag
 from scipy.sparse import block_diag, csc_matrix, diags
@@ -16,7 +17,11 @@ from nav_msgs.msg import Odometry
 from tf_transformations import euler_from_quaternion
 from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point
-
+from nav_msgs.msg import OccupancyGrid
+from tf2_ros import TransformException
+from tf2_ros.buffer import Buffer
+from tf2_ros.transform_listener import TransformListener
+import tf2_geometry_msgs
 
 # TODO CHECK: include needed ROS msg type headers and libraries
 
@@ -36,16 +41,16 @@ class mpc_config:
         default_factory=lambda: np.diag([0.1, 50.0])
     )  # input difference cost matrix, penalty for change of inputs - [accel, steering]
     Qk: list = field(
-        default_factory=lambda: np.diag([38.0, 53.5, 43.0, 1.0]) #13.5, 13.5, 13.0, 5.5
+        default_factory=lambda: np.diag([38.0, 53.5, 43.0, 3.0]) #13.5, 13.5, 13.0, 5.5
     )  # state error cost matrix, for the the next (T) prediction time steps [x, y, v, yaw]
     Qfk: list = field(
-        default_factory=lambda: np.diag([38.0, 53.5, 43.0, 1.0])
+        default_factory=lambda: np.diag([38.0, 53.5, 43.0, 3.0])
     )  # final state error matrix, penalty  for the final state constraints: [x, y, v, yaw]
     # ----------------------------------------------f---
 
     N_IND_SEARCH: int = 20  # Search index number
     DTK: float = 0.1  # time step [s] kinematic
-    dlk: float = 0.45  # dist step [m] kinematic 0.03
+    dlk: float = 0.35  # dist step [m] kinematic 0.03
     LENGTH: float = 0.58  # Length of the vehicle [m]
     WIDTH: float = 0.31  # Width of the vehicle [m]
     WB: float = 0.33  # Wheelbase [m]
@@ -74,6 +79,19 @@ class MPC(Node):
         # TODO: create ROS subscribers and publishers
         #       use the MPC as a tracker (similar to pure pursuit)
         # TODO: get waypoints here
+
+
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+
+        self.ogrid_pub = self.create_publisher(OccupancyGrid, 'Ogrid', 10)
+        self.scan_sub = self.create_subscription(LaserScan, '/scan', self.scan_callback, 1)
+        
+        self.occupancyGrid = None
+        self.gridSize = 50
+        self.resolution = 0.05
+        self.lastTime = 0
+
         self.poseSub = self.create_subscription(Odometry, 'ego_racecar/odom', self.pose_callback, 10)
 
         self.ackermann_pub = self.create_publisher(AckermannDriveStamped, 'drive', 10)
@@ -82,7 +100,9 @@ class MPC(Node):
             "/selected_path",
             1
         )
-        filename = '/home/tianhao/sim_ws/src/f1tenth_lab7/mpc/waypoint1atrium4M.csv'
+
+        filename = '/home/tianhao/sim_ws/src/f1tenth_lab7/mpc/waypoint1atrium4M.csv' #default track
+        filenameO = '/home/tianhao/sim_ws/src/f1tenth_lab7/mpc/waypoint1atrium4MOver.csv' #overtake
         with open (filename, 'r') as f:
             lines = f.readlines()
             self.wp = []
@@ -107,10 +127,37 @@ class MPC(Node):
                     
                 if tempx != '' and tempy != '':
                     self.wp.append([float(tempx), float(tempy), float(tempyaw), float(tempv)])
+
+        with open (filenameO, 'r') as f:
+            lines = f.readlines()
+            self.wpO = []
+
+            for line in lines:
+                count = 0
+                tempx = ''
+                tempy = ''
+                tempyaw = ''
+                tempv = ''
+                for i in range (0, len(line) -1):
+                    if count == 0 and line[i] != ',':
+                        tempx += line[i]
+                    elif count == 1 and line[i] != ',':
+                        tempy += line[i]
+                    elif count == 2 and line[i] != ',':
+                        tempyaw += line[i]
+                    elif count == 3 and line[i] != ',':
+                        tempv += line[i]
+                    else:
+                        count += 1
+                    
+                if tempx != '' and tempy != '':
+                    self.wpO.append([float(tempx), float(tempy), float(tempyaw), float(tempv)])
+
+        
         
         # print(self.wp)
         self.wp = np.array(self.wp)
-
+        self.wpO = np.array(self.wpO)
 
         # self.waypoints = None
 
@@ -122,7 +169,47 @@ class MPC(Node):
         # initialize MPC problem
         self.mpc_prob_init()
 
+    def scan_callback(self, scan_msg):
+        interval = scan_msg.header.stamp.nanosec - self.lastTime
+        if interval > 1e7 or interval < 0:
+            self.lastTime = scan_msg.header.stamp.nanosec
+            self.occupancyGrid = np.full((self.gridSize, self.gridSize), 1)
+
+            # x<-----
+            #       |
+            #       | car
+            #       |
+            #       y
+        
+            for i in range(180, 901): 
+                for j in range(0, int(scan_msg.ranges[i]/ self.resolution)):
+                    x = j * math.sin(scan_msg.angle_increment * (i - 180))
+                    y = self.gridSize/2 - j * math.cos(scan_msg.angle_increment * (i - 180))
+                    if x >= 0 and x <= self.gridSize - 1 and y >= 0 and y <= self.gridSize - 1:
+                        self.occupancyGrid[int(x)][int(y)] = 0
+
+            msg = OccupancyGrid()
+            msg.header.frame_id = 'ego_racecar/base_link'
+            msg.info.width = self.gridSize
+            msg.info.height = self.gridSize
+            msg.info.resolution = self.resolution
+            msg.info.origin.position.x =  0.0
+            msg.info.origin.position.y = -1.25
+
+            msg.data = [0] * (msg.info.width * msg.info.height)
+
+            for i2 in range (0, self.gridSize):
+                for j2 in range (0, self.gridSize):
+                    # print(int(self.occupancyGrid[i2][j2]))
+                    msg.data[i2 * self.gridSize + j2] = int(self.occupancyGrid[j2][i2] * 100)
+            
+            self.ogrid_pub.publish(msg)
+    
+
+
     def pose_callback(self, pose_msg:Odometry):
+
+        
 
         # TODO: extract pose from ROS msg
         quaternion = np.array([pose_msg.pose.pose.orientation.x,
@@ -135,8 +222,8 @@ class MPC(Node):
             euler_in_2pi += 2 * np.pi
         # elif euler_in_2pi > 2 * np.pi:
         #     euler_in_2pi -= 2 * np.pi
-        print("euler ", euler[2])
-        print("euler_in_2pi", euler_in_2pi)
+        # print("euler ", euler[2])
+        # print("euler_in_2pi", euler_in_2pi)
         vehicle_state = State()
         vehicle_state.x = pose_msg.pose.pose.position.x
         vehicle_state.y = pose_msg.pose.pose.position.y
@@ -145,10 +232,84 @@ class MPC(Node):
         # vehicle_state.v = 2.0
         vehicle_state.yaw = euler_in_2pi
 
-        ref_x = self.wp[:, 0]
-        ref_y = self.wp[:, 1]
-        ref_yaw = self.wp[:, 2]
-        ref_v = self.wp[:, 3]
+        _, _, _, ind = nearest_point(np.array([vehicle_state.x, vehicle_state.y]), np.array([self.wp[:, 0], self.wp[:, 1]]).T)
+        print("idx", ind)
+
+        _, _, _, indO = nearest_point(np.array([vehicle_state.x, vehicle_state.y]), np.array([self.wpO[:, 0], self.wpO[:, 1]]).T)
+
+        flag1 = True
+        flag2 = True
+
+        
+        for i in range(-1, 1): #1,2
+            if ind + i >= len(self.wp):
+                idxtemp = ind + i - len(self.wp)
+            else:
+                idxtemp = ind + i
+            if indO + i >= len(self.wp):
+                idxtempO = indO + i - len(self.wpO)
+            else:
+                idxtempO = indO + i    
+
+            print(idxtemp)
+            point = PointStamped()
+            point.header.frame_id = "map"
+            point.point.x = float(self.wp[idxtemp][0])
+            point.point.y = float(self.wp[idxtemp][1])
+            point.point.z = 0.0
+
+            pointO = PointStamped()
+            pointO.header.frame_id = "map"
+            pointO.point.x = float(self.wpO[idxtempO][0])
+            pointO.point.y = float(self.wpO[idxtempO][1])
+            pointO.point.z = 0.0
+
+            try:
+                t = self.tf_buffer.lookup_transform("ego_racecar/base_link", "map", rclpy.time.Time())
+                pose_transformed = tf2_geometry_msgs.do_transform_point(point, t)
+                pose_transformedO = tf2_geometry_msgs.do_transform_point(pointO, t)
+                # self.get_logger().info(f"Transformed pose: {pose_transformed}")
+                # transfer waypoint to car frame, find the point in freespace to be the goal
+                # print("pose x y", pose_transformed.point.x, pose_transformed.point.y)
+                tx = int(pose_transformed.point.x/self.resolution)
+                ty = int(pose_transformed.point.y/self.resolution)
+                # print("tx, ty", tx, int(self.gridSize/2 + ty))
+                if ty > -self.gridSize/2 - 1 and ty < self.gridSize/2 - 1 and tx > 0 and tx < self.gridSize - 1:
+                    
+                    if self.occupancyGrid[int(tx)][int(self.gridSize/2 + ty)] == 1:
+                        # print("ffff")
+                        flag1 = False
+
+                txO = int(pose_transformedO.point.x/self.resolution)
+                tyO = int(pose_transformedO.point.y/self.resolution)
+                if tyO > -self.gridSize/2 and tyO < self.gridSize/2 and txO > 0 and txO < self.gridSize:
+                    if self.occupancyGrid[int(txO)][int(self.gridSize/2 + tyO)] == 1:
+                        flag2 = False
+            except TransformException as ex:
+                self.get_logger().info(
+                    f'Could not transform')
+        speedFlag = True
+                
+        if flag1:
+            print("f1")
+            ref_x = self.wp[:, 0]
+            ref_y = self.wp[:, 1]
+            ref_yaw = self.wp[:, 2]
+            ref_v = self.wp[:, 3]
+        elif flag2:
+            print("f2")
+            ref_x = self.wpO[:, 0]
+            ref_y = self.wpO[:, 1]
+            ref_yaw = self.wpO[:, 2]
+            ref_v = self.wpO[:, 3]
+        else:
+            print("f3")
+            ref_x = self.wp[:, 0]
+            ref_y = self.wp[:, 1]
+            ref_yaw = self.wp[:, 2]
+            ref_v = self.wp[:, 3]
+            speedFlag = False
+
 
 
 
@@ -173,10 +334,13 @@ class MPC(Node):
         # TODO: publish drive message.
         steer_output = self.odelta[0]
         speed_output = max(vehicle_state.v + self.oa[0] * self.config.DTK, 1.0)
-        print("steer_output = ", steer_output, "speed_output = ", speed_output)
+        # print("steer_output = ", steer_output, "speed_output = ", speed_output)
         drive_msg = AckermannDriveStamped()
         drive_msg.drive.steering_angle = steer_output
-        drive_msg.drive.speed = speed_output
+        if speedFlag:
+            drive_msg.drive.speed = speed_output
+        else:
+            drive_msg.drive.speed = 0.5
         self.ackermann_pub.publish(drive_msg)
 
     def mpc_prob_init(self):
@@ -363,8 +527,8 @@ class MPC(Node):
             cyaw[cyaw - state.yaw < -4.5] + (2 * np.pi)
         )
         ref_traj[3, :] = cyaw[ind_list]
-        print("ref  ", ref_traj[3, :])
-        # self.visualize_path(ref_traj)
+        # print("ref  ", ref_traj[3, :])
+        self.visualize_path(ref_traj)
         return ref_traj
 
     def predict_motion(self, x0, oa, od, xref):
@@ -539,7 +703,7 @@ class MPC(Node):
         )
 
         # print("path_predict = ", path_predict)
-        self.visualize_path(path_predict)
+        # self.visualize_path(path_predict)
 
         return mpc_a, mpc_delta, mpc_x, mpc_y, mpc_yaw, mpc_v, path_predict
 
